@@ -133,7 +133,13 @@ const test = (name, body) =>
       for (const who of people) {
         if (process.env.UI_SHOT) await who.page.screenshot({ path: `${process.env.UI_SHOT}/${who.name}.png` }).catch(() => {});
         error.message += `\n--- ${who.name} at ${who.page.url().replace(/^[^#]*/, "")}:\n${(await who.page.locator("#panel").innerText({ timeout: 2000 }).catch(() => "")).slice(0, 1200)}`;
-        const waiting = [...who.open].filter(([, at]) => Date.now() - at > 5000).map(([r, at]) => `${Math.round((Date.now() - at) / 1000)}s ${r.method()} ${r.url()}`);
+        const waiting = [...who.open].filter(([, at]) => Date.now() - at > 5000).map(([r, at]) => {
+          let from = "?";
+          try {
+            from = new URL(r.frame().url()).origin === walletOrigin ? "Selfhold" : "app";
+          } catch {}
+          return `${Math.round((Date.now() - at) / 1000)}s ${from} ${r.method()} ${r.url()}`;
+        });
         if (waiting.length) error.message += `\n--- ${who.name} waits on:\n${waiting.join("\n")}`;
         if (who.walletWindow) error.message += `\n--- ${who.name}'s Selfhold window:\n${(await who.walletWindow.locator("body").innerText({ timeout: 2000 }).catch(() => "(closed)")).slice(0, 600)}`;
       }
