@@ -1,0 +1,123 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The other repositories these tests run against, pinned to commits the suites
+# pass on. The node and sponsor pins match the images the test network runs:
+# keep them equal to the pins in 0xLattice/lattice-ops testnet-follower/Dockerfile.
+env:
+  NODE_VERSION: "24"
+  LATTICE_NODE_REPO: 0xLattice/lattice-node
+  LATTICE_NODE_REF: 6237c0e7d436e0c9a8cf97b88da944f197788ccd
+  LATTICE_SPONSOR_REPO: 0xLattice/lattice-sponsor
+  LATTICE_SPONSOR_REF: 17f5e4d25193ae65cb606eb85e816250dd5044ec
+  LATTICE_WALLET_REPO: adalinxx/selfhold-wallet
+  LATTICE_WALLET_REF: 410040a8cafabaf895d279468638c922d07bb630
+
+jobs:
+  unit:
+    name: Records, policy, sealing and matching
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm test
+
+  node:
+    name: Build the Lattice node and fee sponsor
+    runs-on: ubuntu-24.04
+    container: swift:6.1-jammy
+    timeout-minutes: 120
+    steps:
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: lattice-node-${{ env.LATTICE_NODE_REF }}-sponsor-${{ env.LATTICE_SPONSOR_REF }}-static-1
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.LATTICE_NODE_REPO }}
+          ref: ${{ env.LATTICE_NODE_REF }}
+          path: lattice-node
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.LATTICE_SPONSOR_REPO }}
+          ref: ${{ env.LATTICE_SPONSOR_REF }}
+          path: lattice-sponsor
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Build
+        shell: bash
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev
+          cd lattice-node
+          # Static Swift runtime, so the binaries run on a plain runner.
+          swift build --static-swift-stdlib
+          mkdir ../bin
+          bin="$(swift build --static-swift-stdlib --show-bin-path)"
+          for b in lattice lattice-node lattice-miner lattice-mining-coordinator; do
+            if [ -f "$bin/$b" ]; then cp "$bin/$b" ../bin/; fi
+          done
+          cd ../lattice-sponsor
+          swift build --static-swift-stdlib --product lattice-sponsor
+          cp "$(swift build --static-swift-stdlib --show-bin-path)"/lattice-sponsor ../bin/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lattice
+          path: bin
+          retention-days: 3
+
+  ui:
+    name: Every person, in a browser, through Selfhold
+    needs: node
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      LATTICE: ${{ github.workspace }}/.deps/bin/lattice
+      LATTICE_SPONSOR: ${{ github.workspace }}/.deps/bin/lattice-sponsor
+      LATTICE_WALLET_WEB: ${{ github.workspace }}/.deps/lattice-wallet/dist-web
+      UI_SHOT: ${{ github.workspace }}/ui-logs
+      UI_TRACE: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: lattice
+          path: .deps/bin
+      # The binaries link the Swift runtime in, but not these.
+      - run: chmod +x .deps/bin/* && sudo apt-get update && sudo apt-get install -y --no-install-recommends libsqlite3-0 libcurl4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.LATTICE_WALLET_REPO }}
+          ref: ${{ env.LATTICE_WALLET_REF }}
+          path: .deps/lattice-wallet
+          submodules: true
+      - name: Build Selfhold's window
+        working-directory: .deps/lattice-wallet
+        run: npm ci && npm run build:web
+      - name: Install Playwright
+        working-directory: e2e/ui
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Turnup as each person who uses it
+        working-directory: e2e/ui
+        run: mkdir -p "$UI_SHOT" && npm test
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-logs
+          path: ui-logs
+          retention-days: 7

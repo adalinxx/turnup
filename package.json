@@ -1,0 +1,10 @@
+{
+  "name": "turnup",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A lost and found with no company in the middle",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
