@@ -80,7 +80,7 @@ export async function start() {
   });
   lattice("up");
   // Turnup's spec with 2-second blocks: the policy's time window follows it.
-  const spec = { ...JSON.parse(readFileSync(here("../chain/spec.json"), "utf8")), targetBlockTime: 2000 };
+  const spec = { ...JSON.parse(readFileSync(here("../chain/spec.json"), "utf8")), targetBlockTime: 2000, premine: 0 };
   writeFileSync(`${root}/turnup-test-spec.json`, JSON.stringify(spec));
   for (const chain of [ROOT, AREA_CHAIN]) lattice("child", "create", chain.join("/"), "--spec", `${root}/turnup-test-spec.json`, "--policy-module", here("../chain/policy.wasm"));
   configure((t) => {

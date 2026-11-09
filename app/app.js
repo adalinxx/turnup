@@ -24,7 +24,7 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 export const DEFAULTS = {
   nodes: ["https://lattice-testnet-apps-iad.fly.dev", "https://lattice-testnet-apps-ams.fly.dev"],
-  chain: "Nexus/testnet/turnup",
+  chain: "Nexus/testnet/turnup-b3494e",
   sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor",
   view: { lat: 40.7411, lon: -73.9897, zoom: 14 },
 };
