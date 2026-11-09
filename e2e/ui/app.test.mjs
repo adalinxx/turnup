@@ -159,10 +159,16 @@ async function signUp(who, button) {
   await opened.getByRole("button", { name: /^Sign/ }).click();
   await who.page.bringToFront();
 }
+/** The time of the newest change this person's page keeps as on its way. */
+const newestSent = (who) =>
+  who.page.evaluate(() => Math.max(0, ...Object.entries(localStorage).filter(([k]) => k.startsWith("turnup:pending:")).flatMap(([, v]) => JSON.parse(v).map((p) => p.at))));
+/** Presses `button`, approves in Selfhold, and waits until the page keeps the write as sent. */
 async function approve(who, button) {
+  const before = await newestSent(who);
   const opened = await inSelfhold(who, button);
   await opened.getByRole("button", { name: "Approve with your passkey" }).click();
   await who.page.bringToFront();
+  await expect.poll(() => newestSent(who), { timeout: 120_000 }).toBeGreaterThan(before);
 }
 /** Waits until nothing this person sent is still on its way. */
 async function landed(who) {

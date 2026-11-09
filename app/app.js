@@ -702,10 +702,10 @@ async function item(args, current) {
         button.disabled = false;
       }
     };
-    if ($("#resolve")) $("#resolve").onclick = () => act($("#resolve"), async (slots) => records.item(me, it.id, { ...it, status: "resolved", resolved: Date.now() }, { before: it, photos: it.photos, slots: await slots }), "marking it resolved", () => route());
-    if ($("#reopen")) $("#reopen").onclick = () => act($("#reopen"), async (slots) => records.item(me, it.id, { ...it, status: "open" }, { before: it, photos: it.photos, slots: await slots }), "reopening it", () => route());
+    if ($("#resolve")) $("#resolve").onclick = () => act($("#resolve"), async (slots) => records.item(me, it.id, { ...it, status: "resolved", resolved: Date.now() }, { before: it, photos: it.photos, slots: await slots }), "the post as closed", () => route());
+    if ($("#reopen")) $("#reopen").onclick = () => act($("#reopen"), async (slots) => records.item(me, it.id, { ...it, status: "open" }, { before: it, photos: it.photos, slots: await slots }), "the post as open again", () => route());
     // One press: approving in Selfhold is the confirmation.
-    $("#delete").onclick = () => act($("#delete"), async (slots) => records.item(me, it.id, undefined, { before: it, slots: await slots }), "deleting the post", () => (location.hash = "#/mine"));
+    $("#delete").onclick = () => act($("#delete"), async (slots) => records.item(me, it.id, undefined, { before: it, slots: await slots }), "the deletion", () => (location.hash = "#/mine"));
     // Possible matches, worked out here from the other kind of post nearby.
     if (!resolved) {
       $("#matches").innerHTML = `<h2 style="font-size:18px;margin-top:8px">Possible matches</h2><div class="skeleton"></div>`;
@@ -899,7 +899,7 @@ async function thread(threads, key, current) {
     try {
       s.textContent = "Approve it in Selfhold…";
       const path = turnup.chain(it.chain);
-      await send(path, async () => records.item(me, it.id, { ...it, status: "resolved", resolved: Date.now() }, { before: it, photos: it.photos, slots: await records.photoSlots(await turnup.chainState(path, { fresh: true }), me, it.id) }), "closing the post", (p) => (s.textContent = p));
+      await send(path, async () => records.item(me, it.id, { ...it, status: "resolved", resolved: Date.now() }, { before: it, photos: it.photos, slots: await records.photoSlots(await turnup.chainState(path, { fresh: true }), me, it.id) }), "the post as closed", (p) => (s.textContent = p));
       route();
     } catch (error) {
       s.className = "status small bad";
@@ -954,7 +954,7 @@ async function tags(args, current) {
     const status = $("#tg-status");
     try {
       status.textContent = "Approve it in Selfhold…";
-      await send(ROOT, () => records.tag(me, t.id, { ...t, missing: !t.missing }), t.missing ? "marking it found" : "marking it missing", (p) => (status.textContent = p));
+      await send(ROOT, () => records.tag(me, t.id, { ...t, missing: !t.missing }), t.missing ? "the tag as found" : "the tag as missing", (p) => (status.textContent = p));
       route();
     } catch (error) {
       status.className = "status bad";
