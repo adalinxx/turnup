@@ -1,0 +1,23 @@
+name: Live
+
+# Turnup on the test network as a person meets it: a new account with no coins
+# posts through the deployed fee sponsor on the New York area chain and the
+# root, and reads both back from the other host.
+on:
+  schedule:
+    - cron: "41 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - run: node e2e/live.mjs
