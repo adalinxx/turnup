@@ -117,6 +117,16 @@ async function person(name, { viewport = { width: 390, height: 844 }, at = UNION
     context.on("close", () => clearInterval(watch));
   }
   who.page.on("pageerror", (error) => who.errors.push(error.message));
+  // Who asked for each volume, to name the code behind a request that never ends.
+  who.initiators = new Map();
+  const net = await context.newCDPSession(who.page);
+  await net.send("Network.enable");
+  net.on("Network.requestWillBeSent", (e) => {
+    if (!e.request.url.includes("/volumes/")) return;
+    const frames = [];
+    for (let st = e.initiator.stack; st && frames.length < 14; st = st.parent) for (const f of st.callFrames) frames.push(`${f.functionName || "(anon)"} ${f.url.split("/").slice(-2).join("/")}:${f.lineNumber + 1}`);
+    who.initiators.set(e.request.url, frames.join(" < "));
+  });
   who.page.on("console", (m) => trace(who, `console.${m.type()} ${m.text()}`));
   who.page.on("framenavigated", (f) => f === who.page.mainFrame() && trace(who, `at ${f.url().replace(/^[^#]*/, "")}`));
   who.at = (point) => context.setGeolocation({ latitude: point.lat, longitude: point.lon });
@@ -138,7 +148,7 @@ const test = (name, body) =>
           try {
             from = new URL(r.frame().url()).origin === walletOrigin ? "Selfhold" : "app";
           } catch {}
-          return `${Math.round((Date.now() - at) / 1000)}s ${from} ${r.method()} ${r.url()}`;
+          return `${Math.round((Date.now() - at) / 1000)}s ${from} ${r.method()} ${r.url()}\n    from ${who.initiators.get(r.url()) ?? "?"}`;
         });
         if (waiting.length) error.message += `\n--- ${who.name} waits on:\n${waiting.join("\n")}`;
         if (who.walletWindow) error.message += `\n--- ${who.name}'s Selfhold window:\n${(await who.walletWindow.locator("body").innerText({ timeout: 2000 }).catch(() => "(closed)")).slice(0, 600)}`;
@@ -270,7 +280,8 @@ test("an owner posts their loss and sees the find as a possible match", async ()
   const match = panel(owen).locator("#matches .row").filter({ hasText: PHONE });
   await expect(match).toBeVisible();
   await expect(match).toContainText("Same kind of thing");
-  await expect(match).toContainText(/\d+ m away/);
+  // Posts are rounded to about 100 m: this close reads as the same spot.
+  await expect(match).toContainText(/Same spot|\d+ m away/);
   await landed(owen);
 });
 
