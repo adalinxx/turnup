@@ -150,6 +150,8 @@ function problem(error) {
   return String(error?.message ?? error).replace(/^Error: /, "");
 }
 
+const STILL_SAVING = "Your last change is still being saved. This one can go once it lands: try again in a minute.";
+
 /** Whether `account` may write on `path` now: its last write there landed or was dropped. */
 async function canWrite(path) {
   const chain = path.join("/");
@@ -168,11 +170,17 @@ async function canWrite(path) {
  */
 async function send(where, prepare, what, progress) {
   if (!me) throw new Error("Sign in first.");
+  // A change still on its way on this chain: say so before Selfhold's window
+  // opens for nothing, and look again now, so a retry in a moment can go.
+  if (Array.isArray(where) && pending.waiting(where.join("/"), me)) {
+    settleAll();
+    throw new Error(STILL_SAVING);
+  }
   let path;
   let actions = [];
   const request = (async () => {
     path = await where;
-    if (!(await canWrite(path))) throw new Error("Your last change is still being saved. This one can go once it lands, in a minute or two.");
+    if (!(await canWrite(path))) throw new Error(STILL_SAVING);
     const writes = await prepare(path);
     actions = await records.changes(await turnup.chainState(path, { fresh: true }), writes);
     return actions.length ? { chainPath: path, actions } : null;
@@ -1162,5 +1170,12 @@ setInterval(async () => {
   turnup.refresh();
   await settleAll();
   await updateUnread();
-  if (before !== pending.all().length) route();
+  // Show what landed, unless that would wipe what someone is writing.
+  if (before !== pending.all().length && !writing()) route();
 }, 20_000);
+
+/** Whether the page holds something the person typed or is typing. */
+function writing() {
+  const fields = $$("#panel input:not([type=checkbox]):not([type=file]), #panel textarea");
+  return fields.some((f) => f === document.activeElement || f.value !== f.defaultValue);
+}
