@@ -947,7 +947,9 @@ async function tags(args, current) {
           <div class="small"><b>${esc(t.name)}</b>${t.missing ? ` · <span style="color:var(--lost);font-weight:700">Missing</span>` : ""}</div>
           <div class="actions"><button class="linkish small" data-missing="${esc(t.id)}">${t.missing ? "It's back" : "Mark missing"}</button>
           <a class="linkish small" href="${esc(tagURL(t))}">Open</a></div></div>`).join("")}</div>`
-        : `<div class="empty">No tags yet.</div>`}
+        : `<div class="card soft" style="flex-direction:row;align-items:center;gap:14px">
+            <div class="qr" style="width:120px;flex:none" aria-hidden="true">${qrSVG(`${appBase()}#/about`)}<span class="qr-label">If found, scan me</span><span class="qr-sub">Your keys · Turnup</span></div>
+            <p class="small muted">A tag looks like this. Make one, print a sheet on sticker paper, and stick them on what you'd hate to lose.${me ? "" : " You'll sign in with a passkey when you make the first."}</p></div>`}
       <a class="btn accent" href="#/tags/new">Make a tag</a>
       <p class="status" id="tg-status" role="status"></p>
     </div>`,
