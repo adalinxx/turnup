@@ -12,6 +12,10 @@
 //   user/<a>/box                <a>'s inbox public key (seal.mjs)
 //   index/geo/<g1>/…/<g6>/<id>/<a>   "lost" or "found": an open item at that geohash
 //   index/inbox/<b>/<mid>/<a>   "1": <a> wrote message <mid> to <b>
+//
+// On the reward chain (the coin rewards are paid in, not a Turnup chain):
+//   user/<a>/reward/<id>        {to, amount, chain}: <a> paid the reward on their item <id>,
+//                               written in the same transaction as the payment
 
 import { encode, PRECISION } from "./geo.mjs";
 import { isPublicKey, open, seal } from "./seal.mjs";
@@ -38,7 +42,16 @@ const CATEGORY = new Map(CATEGORIES);
 export const categoryName = (id) => CATEGORY.get(id) ?? "Something else";
 
 /** Field limits, in characters. Clients refuse longer; readers skip records past them. */
-export const LIMITS = { title: 80, details: 1000, place: 120, question: 200, held: 200, reward: 120, tagName: 60, tagNote: 300, message: 2000, photos: 3 };
+export const LIMITS = { title: 80, details: 1000, place: 120, question: 200, held: 200, tagName: 60, tagNote: 300, message: 2000, photos: 3 };
+
+/** The most a reward can be: what a transaction's debit holds. */
+export const MAX_REWARD = (1n << 63n) - 1n;
+/** `value` as a reward, a whole number of coins above zero, or undefined. */
+export function rewardAmount(value) {
+  const text = String(value ?? "").trim().replace(/[,\s]/g, "");
+  if (!/^[1-9][0-9]{0,18}$/.test(text) || BigInt(text) > MAX_REWARD) return undefined;
+  return text;
+}
 
 /** How finely an item's point is kept: three decimals, about 100 m. */
 export const roundPoint = (value) => Math.round(value * 1000) / 1000;
@@ -132,10 +145,14 @@ export function itemValue(draft) {
   };
   const optional = { details: LIMITS.details, place: LIMITS.place };
   if (draft.type === "found") Object.assign(optional, { question: LIMITS.question, held: LIMITS.held });
-  else optional.reward = LIMITS.reward;
   for (const [field, max] of Object.entries(optional)) {
     const text = trimmed(draft[field], max);
     if (text) value[field] = text;
+  }
+  if (draft.type === "lost" && String(draft.reward ?? "").trim()) {
+    const reward = rewardAmount(draft.reward);
+    if (!reward) throw new Error("A reward is a whole number of coins");
+    value.reward = reward;
   }
   if (value.status === "resolved") value.resolved = Number.isSafeInteger(draft.resolved) ? draft.resolved : Date.now();
   return value;
@@ -242,10 +259,12 @@ export function shapeItem(author, id, record, media = []) {
       .sort(([x], [y]) => x - y)
       .map(([, cid]) => cid),
   };
-  for (const field of ["details", "place", "question", "held", "reward"]) {
+  for (const field of ["details", "place", "question", "held"]) {
     const value = text(record[field], LIMITS[field]);
     if (value) out[field] = value;
   }
+  const reward = record.type === "lost" && typeof record.reward === "string" ? rewardAmount(record.reward) : undefined;
+  if (reward) out.reward = reward;
   if (out.status === "resolved" && Number.isSafeInteger(record.resolved)) out.resolved = record.resolved;
   return out;
 }
@@ -325,6 +344,43 @@ export async function by(state, a) {
   out.tags.sort((x, y) => y.time - x.time);
   return out;
 }
+
+/**
+ * `a` pays `amount` to `to` as the reward on their item `id` (on chain
+ * `chain`, "" for the root). The write that goes with the payment, on the
+ * reward chain.
+ */
+export function rewardWrite(a, id, { to, amount, chain = "" }) {
+  const value = rewardAmount(amount);
+  if (!value) throw new Error("A reward is a whole number of coins");
+  if (!to || to === a) throw new Error("Pay the reward to whoever gave it back");
+  return [[`user/${a}/reward/${id}`, JSON.stringify({ to, amount: value, chain })]];
+}
+
+/** The reward `a` paid on item `id`: `{ to, amount, chain }`, or undefined. */
+export async function rewardOf(state, a, id) {
+  return shapeReward(parse(await state.get(`user/${a}/reward/${id}`)));
+}
+
+/** Every reward `a` paid: `{ id, to, amount, chain }`. */
+export async function rewardsBy(state, a) {
+  const prefix = `user/${a}/reward/`;
+  const out = [];
+  for await (const [key, value] of state.list(prefix)) {
+    const id = key.slice(prefix.length);
+    const reward = !id.includes("/") && shapeReward(parse(value));
+    if (reward) out.push({ id, ...reward });
+  }
+  return out;
+}
+
+function shapeReward(record) {
+  if (!isObject(record) || typeof record.to !== "string" || !record.to || record.to.length > 200) return undefined;
+  const amount = rewardAmount(record.amount);
+  if (!amount) return undefined;
+  return { to: record.to, amount, chain: typeof record.chain === "string" && AREA_LABEL.test(record.chain) ? record.chain : "" };
+}
+const AREA_LABEL = /^([0-9b-hjkmnp-z]{2,4})?$/;
 
 /** `a`'s inbox public key, or undefined. */
 export async function boxOf(state, a) {

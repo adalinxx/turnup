@@ -181,6 +181,15 @@ export function createTurnup({ sdk, root, nodes, freshFor = 10_000, fetch = glob
     itemOf,
     mine,
     nonce,
+    /** `account`'s coins on `path`, as a bigint. */
+    balance: async (path, account) => {
+      try {
+        return BigInt((await first((node) => get(node, `/api/state/account/${account}`, path), path)).balance ?? 0);
+      } catch (error) {
+        if (error.cause?.status === 404) return 0n;
+        throw error;
+      }
+    },
     tagOf: async (a, id, options) => records.tagOf(await state(root, options), a, id),
     boxOf: async (a, options) => records.boxOf(await state(root, options), a),
     messages: async (me, key, options) => records.messages(await state(root, options), me, key),

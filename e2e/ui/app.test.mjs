@@ -1,7 +1,9 @@
 // Turnup in a browser, as each person who uses it, through Selfhold's window,
 // against a private stack (../stack.mjs): a node with the Turnup root chain
 // and one area chain (dr5, New York), a fee sponsor that also keeps photos,
-// and Selfhold's window. Nobody holds coins.
+// and Selfhold's window. Nobody holds coins, except an owner paying the
+// reward they offered (paid here in the root chain's coin, the stack's miner
+// funding them).
 //
 //   LATTICE=<lattice-node>/.build/debug/lattice \
 //   LATTICE_SPONSOR=<lattice-sponsor>/.build/debug/lattice-sponsor \
@@ -14,6 +16,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { after, before, test as nodeTest } from "node:test";
 import { chromium, expect as baseExpect } from "@playwright/test";
+import { transfer } from "../stack.mjs";
+
+const sdk = await import(new URL("../../app/vendor/lattice-sdk.js", import.meta.url));
 
 const expect = baseExpect.configure({ timeout: 60_000 });
 // A write lands within a few blocks; blocks come every couple of seconds here.
@@ -33,7 +38,14 @@ const keep = process.env.TURNUP_KEEP
       });
       stack.on("exit", (code) => fail(new Error(`the stack stopped (${code})`)));
     });
-const params = new URLSearchParams({ node: keep.node, chain: keep.chain, sponsor: keep.sponsor, wallet: keep.walletPage });
+// Rewards are paid in the root chain's coin here, which the stack's miner holds.
+const params = new URLSearchParams({ node: keep.node, chain: keep.chain, sponsor: keep.sponsor, wallet: keep.walletPage, coin: keep.chain });
+/** The stack's miner sends `who` `amount` coins on the root chain, and it lands. */
+async function fund(who, amount) {
+  const address = await who.page.evaluate(() => JSON.parse(localStorage.getItem("turnup:me")));
+  const minerKey = Uint8Array.from(Buffer.from(keep.minerKey, "hex"));
+  await transfer(sdk, keep.node, sdk.accountFromPrivateKey(minerKey), minerKey, address, amount, keep.chain.split("/"));
+}
 const APP = `${keep.app}?${params}`;
 const walletOrigin = new URL(keep.walletPage).origin;
 const appPort = new URL(keep.app).port;
@@ -269,7 +281,10 @@ test("an owner posts their loss and sees the find as a possible match", async ()
   await expect(panel(owen).locator("h1")).toHaveText("Report something you lost");
   await panel(owen).getByRole("radio", { name: /Phone/ }).click();
   await panel(owen).getByLabel("In a few words").fill(LOST_PHONE);
-  await panel(owen).getByLabel(/^Reward/).fill("Coffee and many thanks");
+  await panel(owen).getByLabel(/^Reward/).fill("coffee");
+  await button(owen, "Continue with a passkey").click();
+  await expect(panel(owen).locator("#r-status")).toHaveText("A reward is a whole number of coins");
+  await panel(owen).getByLabel(/^Reward/).fill("500");
   // A finder's question is only for finds.
   await expect(panel(owen).getByLabel(/^Ask the owner/)).toBeHidden();
   await signUp(owen, button(owen, "Continue with a passkey"));
@@ -282,7 +297,30 @@ test("an owner posts their loss and sees the find as a possible match", async ()
   await expect(match).toContainText("Same kind of thing");
   // Posts are rounded to about 100 m: this close reads as the same spot.
   await expect(match).toContainText(/Same spot|\d+ m away/);
+  await expect(panel(owen).locator(".tagline.reward")).toHaveText("500 coins reward");
   await landed(owen);
+});
+
+test("a passer-by sees the loss first, with its reward, and a finder is shown it before posting", async () => {
+  const gus = await person("gus", { at: NEAR_UNION_SQUARE });
+  await go(gus);
+  await lookAt(gus, NEAR_UNION_SQUARE);
+  await gus.page.reload();
+  const rows = panel(gus).locator("#list .row");
+  await expect(rows.filter({ hasText: LOST_PHONE })).toContainText("500 coins reward");
+  const titles = await rows.locator(".name").allInnerTexts();
+  assert.ok(titles.indexOf(LOST_PHONE) < titles.indexOf(PHONE), `lost first: ${titles.join(" | ")}`);
+  // About to post a phone found nearby: the owner's loss is offered first.
+  await panel(gus).getByRole("link", { name: /I found something/ }).click();
+  await expect(panel(gus).locator("#f-lost-near")).toBeHidden();
+  await panel(gus).getByRole("radio", { name: /Phone/ }).click();
+  const near = panel(gus).locator("#f-lost-near");
+  await expect(near).toContainText("Is it one of these?");
+  await expect(near.locator(".row").filter({ hasText: LOST_PHONE })).toContainText("500 coins reward");
+  // Their post says what the owner offers.
+  await near.locator(".row").filter({ hasText: LOST_PHONE }).click();
+  await expect(panel(gus)).toContainText("Have you found this?");
+  await expect(panel(gus)).toContainText("They offer 500 coins, paid to you once it's back with them.");
 });
 
 test("the owner claims the find, answering the finder's question privately", async () => {
@@ -349,6 +387,32 @@ test("the owner reads the reply and closes their post", async () => {
   await expect(panel(owen)).toContainText("The owner has it back.");
   await go(owen, "#/mine");
   await expect(panel(owen)).toContainText("Closed");
+});
+
+test("the owner pays the reward to whoever gave it back, from their own coins", async () => {
+  await panel(owen).locator(".row").filter({ hasText: LOST_PHONE }).click();
+  // Fay messaged about her find, not this post: she's still the one to pay.
+  const pay = panel(owen).locator("#pay");
+  await expect(pay).toContainText("Who gave it back?");
+  await expect(pay).toContainText("Pay them the 500 coins you offered");
+  await expect(pay.locator(".row")).toHaveCount(1);
+  await expect(pay.locator(".row")).toContainText(PHONE);
+  // No coins yet: Selfhold says so, and nothing is sent.
+  const opened = await inSelfhold(owen, pay.getByRole("button", { name: "Pay" }));
+  await expect(opened.getByText(/holds 0/)).toBeVisible();
+  await opened.getByRole("button", { name: "Close" }).click();
+  await owen.page.bringToFront();
+  await expect(panel(owen).locator("#p-status")).toContainText("holds 0 coins");
+  // With coins, it goes: the payment and its receipt in one write.
+  await fund(owen, 1000n);
+  await approve(owen, pay.getByRole("button", { name: "Pay" }));
+  await landed(owen);
+  await owen.page.reload();
+  await expect(panel(owen)).toContainText("You paid the 500 coins reward to");
+  // Fay sees it in her conversation with Owen, and holds the coins.
+  await go(fay, "#/inbox");
+  await panel(fay).locator(".row").filter({ hasText: PHONE }).click();
+  await expect(panel(fay)).toContainText(/They paid you a 500 coins reward\. You hold 500 coins on /);
 });
 
 let tagLink;

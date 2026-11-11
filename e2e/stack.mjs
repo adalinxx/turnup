@@ -137,7 +137,7 @@ export async function start() {
 }
 
 /** The miner sends `amount` to `to` on `chain`, and it lands. */
-async function transfer(sdk, node, miner, minerKey, to, amount, chain) {
+export async function transfer(sdk, node, miner, minerKey, to, amount, chain) {
   const read = async (address) => {
     const r = await fetch(`${node}/api/state/account/${address}?chainPath=${chain.join("/")}`);
     return r.ok ? r.json() : {};

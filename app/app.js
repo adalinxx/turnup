@@ -27,6 +27,8 @@ export const DEFAULTS = {
   chain: "Nexus/testnet/turnup-b3494e",
   sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor",
   view: { lat: 40.7411, lon: -73.9897, zoom: 14 },
+  // The chain whose coin rewards are paid in.
+  coin: "Nexus/testnet",
 };
 const params = new URLSearchParams(location.search);
 // A link may name other hosts, a chain, a sponsor or a wallet for this visit.
@@ -35,6 +37,7 @@ const NODES = nodes.length ? nodes : DEFAULTS.nodes;
 const ROOT = (params.get("chain") || DEFAULTS.chain).split("/");
 const SPONSOR = params.get("sponsor") || DEFAULTS.sponsor;
 const WALLET = params.get("wallet") || undefined;
+const COIN = (params.get("coin") || DEFAULTS.coin).split("/");
 
 const store = {
   get(key, fallback) {
@@ -130,7 +133,7 @@ const stepLabel = (action, needsInbox = true) =>
   ({ signin: "Continue with a passkey", unlock: "Open my messages" })[nextStep(needsInbox)] ?? action;
 const stepNote = (needsInbox = true) =>
   ({
-    signin: "Your passkey makes a free account in Selfhold, and opens your private messages. No coins, no email, no password.",
+    signin: "Your passkey makes a free account in Selfhold, and opens your private messages. No coins needed, no email, no password.",
     unlock: "Selfhold signs once to open your private messages on this device.",
   })[nextStep(needsInbox)] ?? "";
 
@@ -166,9 +169,10 @@ async function canWrite(path) {
  * promise of one) through Selfhold, shown at once. `what` names it in the
  * "saving" line. Call it from a click before any other wait: Selfhold's
  * window opens at once (a browser blocks one opened later) and the write is
- * made while it opens. Throws with a readable reason.
+ * made while it opens. `payments` (`[{ to, amount }]`) are paid from the
+ * account's coins in the same transaction. Throws with a readable reason.
  */
-async function send(where, prepare, what, progress) {
+async function send(where, prepare, what, progress, { payments } = {}) {
   if (!me) throw new Error("Sign in first.");
   // A change still on its way on this chain: say so before Selfhold's window
   // opens for nothing, and look again now, so a retry in a moment can go.
@@ -183,7 +187,9 @@ async function send(where, prepare, what, progress) {
     if (!(await canWrite(path))) throw new Error(STILL_SAVING);
     const writes = await prepare(path);
     actions = await records.changes(await turnup.chainState(path, { fresh: true }), writes);
-    return actions.length ? { chainPath: path, actions } : null;
+    if (!actions.length) return null;
+    // Payments come from the account's own coins, never bought with work.
+    return { chainPath: path, actions, ...(payments && { payments, coinOnly: true }) };
   })();
   // Before its first write Selfhold hasn't connected this site, though `me`
   // signed here: it then writes as the account its window holds, checked below.
@@ -251,6 +257,10 @@ async function settleAll() {
 const whoHTML = (a, { you = me } = {}) =>
   `<span class="who"><span class="icon">${accountIcon(a, 28)}</span><b>${a === you ? "You" : esc(shortAccount(a))}</b></span>`;
 
+/** `amount` coins, as people read it. */
+const coins = (amount) => `${BigInt(amount).toLocaleString("en-US")} ${amount === "1" ? "coin" : "coins"}`;
+const rewardTag = (it) => (it.type === "lost" && it.reward && it.status !== "resolved" ? `<span class="tagline reward">${esc(coins(it.reward))} reward</span>` : "");
+
 const typeTag = (it) =>
   it.status === "resolved"
     ? `<span class="tagline done">${it.type === "found" ? "Returned" : "Found again"}</span>`
@@ -296,7 +306,7 @@ function itemRow(it, { from, note } = {}) {
   return `<a class="row" href="${itemHref(it)}">
     ${thumbHTML(it)}
     <span class="main"><span class="name">${esc(it.title)}</span>
-    <span class="sub">${typeTag(it)} ${esc(where)}${esc(it.type === "found" ? "found" : "lost")} ${esc(whenText(it.when))}${esc(distance)}</span>
+    <span class="sub">${typeTag(it)}${rewardTag(it)} ${esc(where)}${esc(it.type === "found" ? "found" : "lost")} ${esc(whenText(it.when))}${esc(distance)}</span>
     ${note ? `<span class="sub">${note}</span>` : ""}</span></a>`;
 }
 
@@ -415,10 +425,12 @@ async function home(_args, current) {
     const shown = items
       .filter((it) => filter.type === "all" || it.type === filter.type)
       .filter((it) => !filter.category || it.category === filter.category)
-      .sort((x, y) => y.when - x.when || y.time - x.time);
+      // What people are looking for comes first: it's why finders look.
+      .sort((x, y) => (x.type === y.type ? 0 : x.type === "lost" ? -1 : 1) || y.when - x.when || y.time - x.time);
     setMarkers(shown);
     const c = map.getCenter();
-    $("#count").textContent = items.length ? `${shown.length} in view` : "";
+    const lost = shown.filter((it) => it.type === "lost").length;
+    $("#count").textContent = items.length ? [lost && `${lost} lost`, shown.length - lost && `${shown.length - lost} found`].filter(Boolean).join(" · ") || "0 in view" : "";
     $("#list").innerHTML = shown.length
       ? shown.map((it) => itemRow(it, { from: { lat: c.lat, lon: c.lng } })).join("")
       : `<div class="empty">${items.length ? "Nothing like that in view." : "Nothing reported in this part of the map yet."}<span class="small">Move the map, or be the first to post here.</span></div>`;
@@ -478,6 +490,7 @@ async function report(args, current, name) {
         <label class="field"><span>Place <span class="hint">(optional)</span></span><input id="f-place" maxlength="${records.LIMITS.place}" value="${v("place")}" placeholder="e.g. Bus 14, back row · Corner café"></label>
         <p class="small muted">Only a rough spot is shown, to about 100 m.</p>
       </fieldset>
+      <div id="f-lost-near" hidden></div>
       <label class="field"><span id="when-label">When?</span><input id="f-when" type="date" value="${dateValue(draft.when ?? Date.now())}" max="${dateValue(Date.now())}"></label>
       <label class="field"><span>Describe it <span class="hint" id="details-hint"></span></span><textarea id="f-details" maxlength="${records.LIMITS.details}">${v("details")}</textarea></label>
       <div id="found-only">
@@ -485,7 +498,8 @@ async function report(args, current, name) {
           <span class="hint">Something only the owner could answer. You'll see their answer privately.</span></label>
         <label class="field"><span>Where is it now?</span><input id="f-held" maxlength="${records.LIMITS.held}" value="${v("held") || (editing ? "" : "With me")}" placeholder="With me · Left at the front desk"></label>
       </div>
-      <label class="field" id="lost-only"><span>Reward <span class="hint">(optional)</span></span><input id="f-reward" maxlength="${records.LIMITS.reward}" value="${v("reward")}" placeholder="e.g. Coffee and many thanks"></label>
+      <label class="field" id="lost-only"><span>Reward, in coins <span class="hint">(optional)</span></span><input id="f-reward" inputmode="numeric" maxlength="26" autocomplete="off" value="${v("reward")}" placeholder="e.g. 500">
+        <span class="hint">You pay it from your Selfhold account once it's back, to whoever returned it: coins on ${esc(COIN.join("/"))}. A reward gets more people looking.</span></label>
       <fieldset><legend>Photos <span class="hint" style="font-weight:400">(optional, up to ${records.LIMITS.photos})</span></legend>
         <p class="small muted" id="photo-hint"></p>
         <div class="photos" id="f-photos"></div>
@@ -588,8 +602,35 @@ async function report(args, current, name) {
       if (current()) showPhotos(), remember();
     }
   };
+  // A finder sees nearby losses it could be first: the owner is already looking.
+  let nearTimer;
+  let nearAsked = 0;
+  const showLostNear = () => {
+    clearTimeout(nearTimer);
+    nearTimer = setTimeout(async () => {
+      const box = $("#f-lost-near");
+      if (!box || !current()) return;
+      if (editing || !isFound() || !category) return void (box.hidden = true);
+      const asked = ++nearAsked;
+      const draft = { ...collect(), author: me ?? "" };
+      if (!draft.when) draft.when = Date.now();
+      const near = await turnup.itemsIn(geo.around(draft, 3000) ?? []).catch(() => []);
+      if (!current() || asked !== nearAsked) return;
+      const found = matches(draft, near, 4);
+      box.hidden = !found.length;
+      box.innerHTML = found.length
+        ? `<div class="card soft"><h2 style="font-size:18px">Is it one of these?</h2>
+            <p class="small muted">Someone nearby is looking for something like it. If it's theirs, message them from their post: no need to post it too.</p>
+            <div style="margin:0 -16px">${found.map((m) => itemRow(m.item, { note: `<span class="reasons">${m.reasons.map((r) => `<span>${esc(r)}</span>`).join("")}</span>` })).join("")}</div></div>`
+        : "";
+      fillPhotos(box);
+    }, 400);
+  };
+  pickmap.on("moveend", showLostNear);
+  for (const b of $$("#f-type button, #f-category [role=radio]")) b.addEventListener("click", showLostNear);
   setType();
   showPhotos();
+  showLostNear();
 
   $("#report").onsubmit = async (event) => {
     event.preventDefault();
@@ -655,7 +696,7 @@ async function item(args, current) {
     `<div class="top"><a class="back" href="${mine ? "#/mine" : "#/"}">${BACK} ${mine ? "My posts" : "Nearby"}</a>
       <button class="btn quiet small" type="button" id="share">Share</button></div>
     <div class="wrap">
-      ${typeTag(it)}
+      <div>${typeTag(it)}${rewardTag(it)}</div>
       <h1 class="title">${esc(it.title)}</h1>
       ${resolved ? `<p class="notice good">${isFound ? "This has been returned to its owner." : "The owner has it back."}${it.resolved ? ` ${esc(day(it.resolved))}.` : ""}</p>` : ""}
       ${it.photos.length ? `<div class="photos ${it.photos.length === 1 ? "one" : ""}">${it.photos.map((cid, n) => `<img alt="Photo ${n + 1} of ${esc(it.title)}" data-photo="${esc(cid)}">`).join("")}</div>` : ""}
@@ -663,7 +704,7 @@ async function item(args, current) {
         <dt>What</dt><dd>${EMOJI[it.category]} ${esc(records.categoryName(it.category))}</dd>
         <dt>${isFound ? "Found" : "Lost"}</dt><dd>${esc(whenText(it.when))}${it.place ? ` · ${esc(it.place)}` : ""}</dd>
         ${isFound && it.held ? `<dt>Now</dt><dd>${esc(it.held)}</dd>` : ""}
-        ${!isFound && it.reward ? `<dt>Reward</dt><dd>${esc(it.reward)}</dd>` : ""}
+        ${!isFound && it.reward ? `<dt>Reward</dt><dd>${esc(coins(it.reward))}, paid by the owner when it's back</dd>` : ""}
         <dt>Posted</dt><dd>${esc(ago(it.time))} by ${whoHTML(it.author)}</dd>
       </dl>
       ${it.details ? `<p style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(it.details)}</p>` : ""}
@@ -714,6 +755,50 @@ async function item(args, current) {
     if ($("#reopen")) $("#reopen").onclick = () => act($("#reopen"), async (slots) => records.item(me, it.id, { ...it, status: "open" }, { before: it, photos: it.photos, slots: await slots }), "the post as open again", () => route());
     // One press: approving in Selfhold is the confirmation.
     $("#delete").onclick = () => act($("#delete"), async (slots) => records.item(me, it.id, undefined, { before: it, slots: await slots }), "the deletion", () => (location.hash = "#/mine"));
+    // Back, with a reward offered: pay whoever returned it, from their conversation.
+    if (resolved && !isFound && it.reward) {
+      const [paid, all] = await Promise.all([
+        turnup.state(COIN, { fresh: true }).then((state) => records.rewardOf(state, me, it.id)).catch(() => undefined),
+        inbox ? turnup.messages(me, inbox, { fresh: true }).catch(() => []) : [],
+      ]);
+      if (!current()) return;
+      // Whoever gave it back wrote about this post, or about their find of it:
+      // everyone this account has talked to, about this post first.
+      const about = records.aboutKey({ type: "item", chain: it.chain, author: it.author, id: it.id });
+      const people = [];
+      for (const t of records.threads(all, me).sort((x, y) => (records.aboutKey(y.about) === about) - (records.aboutKey(x.about) === about))) {
+        if (!people.some((p) => p.with === t.with)) people.push(t);
+      }
+      $("#matches").innerHTML = paid
+        ? `<p class="notice good">You paid the ${esc(coins(paid.amount))} reward to ${whoHTML(paid.to)}.</p>`
+        : `<div class="card soft" id="pay"><h2 style="font-size:18px">Who gave it back?</h2>
+            <p class="small muted">Pay them the ${esc(coins(it.reward))} you offered, from your coins on ${esc(COIN.join("/"))}.</p>
+            ${people.length
+              ? `<div style="margin:0 -16px">${people.map((t) => `<div class="row"><span class="who"><span class="icon" style="width:44px;height:44px">${accountIcon(t.with, 44)}</span></span>
+                  <span class="main"><span class="name">${esc(shortAccount(t.with))}</span><span class="sub">About ${esc(t.about.type === "tag" ? `your tag “${t.about.name}”` : t.about.title || "a post")}</span></span>
+                  <button class="btn accent small" type="button" data-pay="${esc(t.with)}">Pay</button></div>`).join("")}</div>`
+              : `<p class="small">Nobody has messaged you${inbox ? "" : " on this device"}. Whoever returned it can message you from this post.</p>`}
+            <p class="status small" id="p-status" role="status"></p></div>`;
+      for (const b of $$("[data-pay]")) b.onclick = async () => {
+        const s = $("#p-status");
+        s.className = "status small";
+        $$("[data-pay]").forEach((x) => (x.disabled = true));
+        try {
+          s.textContent = "Approve the payment in Selfhold…";
+          const to = b.dataset.pay;
+          const sent = await send(COIN, () => records.rewardWrite(me, it.id, { to, amount: it.reward, chain: it.chain }), "the reward", (p) => (s.textContent = p), {
+            payments: [{ to, amount: it.reward }],
+          });
+          if (sent) return route();
+        } catch (error) {
+          s.className = "status small bad";
+          s.textContent = error?.code === "NeedsCoins" && error.needed !== undefined && !error.sponsor
+            ? `Your Selfhold account holds ${coins(String(error.balance))} on ${COIN.join("/")}, and this needs ${coins(String(error.needed))}. Add coins to it, then pay.`
+            : problem(error);
+        }
+        $$("[data-pay]").forEach((x) => (x.disabled = false));
+      };
+    }
     // Possible matches, worked out here from the other kind of post nearby.
     if (!resolved) {
       $("#matches").innerHTML = `<h2 style="font-size:18px;margin-top:8px">Possible matches</h2><div class="skeleton"></div>`;
@@ -734,7 +819,7 @@ async function item(args, current) {
   const claim = isFound;
   $("#act").innerHTML = `<div class="card soft" id="reach">
       <h2 style="font-size:18px">${claim ? "Is this yours?" : "Have you found this?"}</h2>
-      <p class="small muted">${claim ? "Tell the finder how you know it's yours. Only they can read it." : "Tell the owner where it is. Only they can read it."}</p>
+      <p class="small muted">${claim ? "Tell the finder how you know it's yours. Only they can read it." : `Tell the owner where it is. Only they can read it.${it.reward ? ` They offer ${esc(coins(it.reward))}, paid to you once it's back with them.` : ""}`}</p>
       ${claim && it.question ? `<label class="field"><span>The finder asks: ${esc(it.question)}</span><input id="m-answer" maxlength="300" autocomplete="off"></label>` : ""}
       <label class="field"><span>${claim ? "Your message" : "Your message"}</span><textarea id="m-text" maxlength="${records.LIMITS.message}" placeholder="${claim ? "Describe it, and when you can pick it up" : "Where you found it, and how they can get it"}"></textarea></label>
       ${claim ? "" : `<label class="check"><input type="checkbox" id="m-share"> Share where I am now</label>`}
@@ -858,9 +943,22 @@ async function thread(threads, key, current) {
   store.set(`read:${me}`, marks);
   const it = about.type === "item" ? await turnup.itemOf(about.chain, about.author, about.id).catch(() => undefined) : undefined;
   const tag = about.type === "tag" ? await turnup.tagOf(about.author, about.id).catch(() => undefined) : undefined;
+  // Rewards between the two of them, either way, read from the coin's chain.
+  const between = await turnup.state(COIN, { fresh: true })
+    .then(async (state) => [
+      ...(await records.rewardsBy(state, other)).filter((r) => r.to === me).map((r) => ({ ...r, toMe: true })),
+      ...(await records.rewardsBy(state, me)).filter((r) => r.to === other),
+    ])
+    .catch(() => []);
+  const held = between.some((r) => r.toMe) ? await turnup.balance(COIN, me).catch(() => undefined) : undefined;
   if (!current()) return;
   const myItem = it && it.author === me;
   const subject = about.type === "tag" ? `Your tag “${about.name}”` : about.title;
+  const rewardCard = [
+    ...between.map((r) => `<p class="notice good">${r.toMe ? `They paid you a ${esc(coins(r.amount))} reward.${held !== undefined ? ` You hold ${esc(coins(String(held)))} on ${esc(COIN.join("/"))}.` : ""}` : `You paid them a ${esc(coins(r.amount))} reward.`}</p>`),
+    // A loss they offer a reward for, still open: say so to whoever is talking to them about it.
+    !myItem && it?.type === "lost" && it.reward && it.status === "open" ? `<p class="small muted">They offer ${esc(coins(it.reward))}, paid to you once it's back with them.</p>` : "",
+  ].join("");
   render(
     `<div class="top"><a class="back" href="#/inbox">${BACK} Messages</a></div>
     <div class="wrap" style="padding-bottom:8px">
@@ -868,6 +966,7 @@ async function thread(threads, key, current) {
       ${it ? `<div style="margin:0 -16px">${itemRow(it)}</div>` : `<p class="small muted">About: ${esc(subject || "a post")}${tag ? "" : ""}</p>`}
       ${myItem && it.status === "open" ? `<div class="card soft"><p class="small">${it.type === "found" ? "Once you've handed it over, close the post so others stop asking." : "Got it back? Close the post so finders know."}</p>
         <button class="btn small" id="t-resolve">${it.type === "found" ? "It's back with its owner" : "I got it back"}</button><p class="status small" id="t-rstatus"></p></div>` : ""}
+      ${rewardCard}
     </div>
     <div class="thread" id="thread">
       ${(t?.messages ?? []).map((m) => `<div class="bubble ${m.from === me ? "me" : "them"}">

@@ -1,8 +1,10 @@
 # Turnup
 
-A lost and found that no company runs. Post what you lost or found, see
-what turned up nearby, and talk privately to get it back. Nobody needs
-coins, an email address or a password.
+A lost and found that no company runs, built around the people who lost
+something. Post what you lost, with a reward if you like; whoever finds it
+sees it first and talks to you privately to get it back. Nobody needs
+coins, an email address or a password: coins only move when an owner pays
+the reward they offered.
 
 Turnup keeps its data on Lattice chains and has no server of its own. The
 page reads every record from a node and checks it against the chain's own
@@ -14,12 +16,18 @@ sponsor.
 ## Using it
 
 - **Nearby**: a map, with what was lost (amber) and found (green) in view.
+  What people are looking for is listed first, with any reward on it.
   Filter by lost or found and by kind of thing.
 - **I lost something / I found something**: kind of thing, a few words, a
   pin on the map (shown only to about 100 m), when, a description, and up to
   three photos. A finder can ask the owner a question only the owner could
-  answer, and say where the thing is now. An owner can offer a reward. The
-  form keeps a draft while you write.
+  answer, and say where the thing is now. Before a finder posts, the losses
+  nearby that it could be are shown first. The form keeps a draft while you
+  write.
+- **Rewards**: an owner can offer a reward in coins. Nothing is paid up
+  front: once it's back, the owner's post asks who gave it back and pays
+  them from the owner's Selfhold account, with a receipt both of them see.
+  Rewards are paid in the coin of `?coin=` (default `Nexus/testnet`).
 - **A post**: anyone can press "Is this yours?" (on a find) or "Have you
   found this?" (on a loss) and send a private message. On your own post you
   see **possible matches**, worked out on your device from nearby posts of
@@ -54,6 +62,8 @@ and lands in a block or two.
   - `user/<a>/box`: the account's inbox public key.
   - `index/geo/<g1>/…/<g6>/<id>/<a>`: where an open item is.
   - `index/inbox/<b>/<mid>/<a>`: a message for `b`.
+  - `user/<a>/reward/<id>` on the reward chain: the receipt for the reward
+    on `a`'s item `id`, written in the same transaction as the payment.
 - **Private messages** (`client/seal.mjs`): the inbox key is X25519, made
   from the wallet's deterministic signature over a fixed text, so the same
   passkey opens the same inbox on any device. A message's content key is
@@ -72,7 +82,7 @@ python3 -m http.server 8765   # then open http://127.0.0.1:8765/app/
 ```
 
 It reads the test network by default. A link may carry `?node=` (comma
-separated), `?chain=`, `?sponsor=` and `?wallet=` for that visit.
+separated), `?chain=`, `?sponsor=`, `?wallet=` and `?coin=` for that visit.
 
 ## Tests
 
@@ -87,8 +97,9 @@ cd e2e/ui && npm install && \
 The UI tests start a private stack (`e2e/stack.mjs`): a node mining the root
 and a `dr5` area chain, a fee sponsor, and Selfhold's window. They then act
 as each person in their own browser with their own passkey: a visitor, a
-finder, an owner, someone snooping on a thread, and a tag's finder. Nobody
-in them holds coins.
+finder, an owner, a passer-by, someone snooping on a thread, and a tag's
+finder. Nobody in them holds coins, except the owner when paying the reward
+they offered (the stack's miner funds them, in the root chain's coin).
 
 ## Licence
 

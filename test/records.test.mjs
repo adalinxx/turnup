@@ -66,7 +66,7 @@ function chain() {
 const keyFor = (seed) => inboxKey(Buffer.alloc(64, seed).toString("hex"));
 const PARK = { lat: 40.78123, lon: -73.96654 };
 const WALLET_FOUND = { type: "found", category: "wallet", title: "Brown leather wallet", details: "Near the boathouse bench", place: "Central Park", ...PARK, when: 1_799_990_000_000, question: "What's on the library card?", held: "With me" };
-const WALLET_LOST = { type: "lost", category: "wallet", title: "Lost my brown wallet", details: "Leather, has a library card", ...PARK, lat: 40.7835, when: 1_799_980_000_000, reward: "$20 and thanks" };
+const WALLET_LOST = { type: "lost", category: "wallet", title: "Lost my brown wallet", details: "Leather, has a library card", ...PARK, lat: 40.7835, when: 1_799_980_000_000, reward: "2,500" };
 
 test("an item is listed where it is, and read back as written", async () => {
   const c = chain();
@@ -79,6 +79,28 @@ test("an item is listed where it is, and read back as written", async () => {
   assert.deepEqual(it.photos, ["bafyphoto1"]);
   assert.equal(it.reward, undefined, "a found item carries no reward");
   assert.equal(it.status, "open");
+});
+
+test("a reward is a whole number of coins, on a loss only; a receipt names who was paid", async () => {
+  const c = chain();
+  assert.ok(await c.write(ANA, records.item(ANA, "i1", WALLET_LOST)));
+  assert.equal((await records.itemOf(c.state, ANA, "i1")).reward, "2500");
+  for (const bad of ["coffee", "0", "-5", "1.5", "9223372036854775808"]) {
+    assert.throws(() => records.itemValue({ ...WALLET_LOST, reward: bad }), /whole number of coins/, bad);
+  }
+  assert.equal(records.itemValue({ ...WALLET_LOST, reward: "  " }).reward, undefined, "no reward is fine");
+  assert.equal(records.itemValue({ ...WALLET_FOUND, reward: "50" }).reward, undefined, "a find offers none");
+  // A record written as text by another client is read as no reward.
+  c.kv.set(`user/${BEN}/post/old`, JSON.stringify({ ...records.itemValue({ ...WALLET_LOST, reward: "" }), reward: "Coffee", time: 1 }));
+  assert.equal((await records.itemOf(c.state, BEN, "old")).reward, undefined);
+
+  // The receipt goes on the reward chain with the payment; the policy takes it there too.
+  assert.ok(await c.write(ANA, records.rewardWrite(ANA, "i1", { to: BEN, amount: "2500", chain: "dr5" })));
+  assert.deepEqual(await records.rewardOf(c.state, ANA, "i1"), { to: BEN, amount: "2500", chain: "dr5" });
+  assert.equal(await records.rewardOf(c.state, ANA, "nope"), undefined);
+  assert.deepEqual(await records.rewardsBy(c.state, ANA), [{ id: "i1", to: BEN, amount: "2500", chain: "dr5" }]);
+  assert.equal(await c.write(BEN, [[`user/${ANA}/reward/i2`, JSON.stringify({ to: BEN, amount: "1", chain: "" })]]), false, "nobody writes another's receipt");
+  assert.throws(() => records.rewardWrite(ANA, "i1", { to: ANA, amount: "5" }), /whoever gave it back/);
 });
 
 test("a resolved item leaves the map but stays readable; reopening lists it again", async () => {
