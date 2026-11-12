@@ -8,13 +8,15 @@
 // children, and uses one only when it runs the root's exact spec (same
 // policy, same rules), so nobody can slip other rules in under an area's name.
 //
-// Every read is checked by CID from whichever host answers; writes go to the
+// A chain's hosts are the start `nodes` that serve it, then the hosts its
+// directory declares (the SDK's ChainNodes), so a chain can move between
+// hosts. Every read is checked by CID from whichever host answers; writes go to the
 // person's wallet, which signs them and pays the fee with this device's work
 // through a fee sponsor.
 
 import * as records from "./records.mjs";
 import { encode } from "./geo.mjs";
-import { anyHost, view, volumeLoader } from "./state.mjs";
+import { view, volumeLoader } from "./state.mjs";
 
 /** An area chain's directory: a geohash prefix of 2 to 4 characters. */
 export const AREA = /^[0-9b-hjkmnp-z]{2,4}$/;
@@ -25,14 +27,20 @@ export const AREA = /^[0-9b-hjkmnp-z]{2,4}$/;
  */
 export function createTurnup({ sdk, root, nodes, freshFor = 10_000, fetch = globalThis.fetch.bind(globalThis), overlay = (path, state) => state }) {
   if (!sdk || !root?.length || !nodes?.length) throw new Error("createTurnup needs { sdk, root, nodes }");
-  const chains = new Map(); // path string -> { path, load, volumes, current }
+  const hosts = new sdk.ChainNodes(nodes, { fetch });
+  const chains = new Map(); // path string -> { path, reads, current }
   const chain = (path) => {
     const name = path.join("/");
-    if (!chains.has(name)) {
-      const volumes = new sdk.VolumeClient(anyHost(nodes.map((node) => new sdk.HTTPVolumeTransport(`${node}/volumes`, { chainPath: path }))));
-      chains.set(name, { path, volumes, load: volumeLoader(volumes, sdk.decodeDagCbor), current: null });
-    }
+    if (!chains.has(name)) chains.set(name, { path, reads: new Map(), current: null });
     return chains.get(name);
+  };
+  /** The chain's Volumes on `node`, and a loader over them that keeps what it reads. */
+  const on = (c, node) => {
+    if (!c.reads.has(node)) {
+      const volumes = new sdk.VolumeClient(new sdk.HTTPVolumeTransport(`${node}/volumes`, { chainPath: c.path }));
+      c.reads.set(node, { volumes, load: volumeLoader(volumes, sdk.decodeDagCbor) });
+    }
+    return c.reads.get(node);
   };
   const get = async (node, route, path) => {
     const url = new URL(route, node);
@@ -43,21 +51,22 @@ export function createTurnup({ sdk, root, nodes, freshFor = 10_000, fetch = glob
   };
   const first = async (ask, path) => {
     try {
-      return await Promise.any(nodes.map(ask));
+      return await hosts.read(path, (node) => ask(node.url));
     } catch (error) {
-      throw new Error(`No host is serving ${path.join("/")}`, { cause: error.errors?.[0] ?? error });
+      throw new Error(`No host is serving ${path.join("/")}`, { cause: error });
     }
   };
 
-  /** The chain's tip as the first host to answer has it: `{ hash, height, specCID, state }`, reused for `freshFor`. */
+  /** The chain's tip as the first of its hosts to answer has it: `{ hash, height, specCID, state }`, reused for `freshFor`. */
   function tip(path, { fresh = false } = {}) {
     const c = chain(path);
     if (!fresh && c.current && Date.now() - c.current.at < freshFor) return c.current.read;
     const read = first(async (node) => {
+      const { volumes, load } = on(c, node);
       const { hash } = await get(node, "/api/block/latest", path);
-      const block = sdk.decodeCanonicalBlock((await c.volumes.get(hash)).rootBytes());
-      const post = sdk.decodeCanonicalLatticeState((await c.volumes.get(block.postStateCID)).rootBytes());
-      return { hash, height: Number(block.height), specCID: block.specCID, state: view(c.load, post.generalStateCID) };
+      const block = sdk.decodeCanonicalBlock((await volumes.get(hash)).rootBytes());
+      const post = sdk.decodeCanonicalLatticeState((await volumes.get(block.postStateCID)).rootBytes());
+      return { hash, height: Number(block.height), specCID: block.specCID, state: view(load, post.generalStateCID) };
     }, path);
     c.current = { at: Date.now(), read };
     read.catch(() => c.current?.read === read && (c.current = null));
@@ -166,9 +175,13 @@ export function createTurnup({ sdk, root, nodes, freshFor = 10_000, fetch = glob
     }
   }
 
+  /** A Volume of chain `path` by CID, from the first of its hosts that has it. */
+  const volume = (path, cid) => first((node) => on(chain(path), node).volumes.get(cid), path);
+
   return {
     root,
     nodes,
+    volume,
     chain: (label) => pathOf(label),
     tip,
     state,

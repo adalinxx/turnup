@@ -32,6 +32,7 @@ export const DEFAULTS = {
 };
 const params = new URLSearchParams(location.search);
 // A link may name other hosts, a chain, a sponsor or a wallet for this visit.
+// Reads start at the hosts and go on to whichever hosts serve each chain.
 const nodes = (params.get("node") ?? "").split(",").filter(Boolean).map((n) => n.replace(/\/+$/, ""));
 const NODES = nodes.length ? nodes : DEFAULTS.nodes;
 const ROOT = (params.get("chain") || DEFAULTS.chain).split("/");
@@ -270,20 +271,15 @@ const photoCache = new Map();
 /** A blob URL for photo `cid`, read from any host and checked; undefined if it isn't one. */
 function photoURL(cid) {
   if (!photoCache.has(cid)) {
-    const volumes = new sdk.VolumeClient(new sdk.HTTPVolumeTransport(`${NODES[0]}/volumes`, { chainPath: ROOT }));
     photoCache.set(
       cid,
-      (async () => {
-        for (const node of NODES) {
-          try {
-            const v = await new sdk.VolumeClient(new sdk.HTTPVolumeTransport(`${node}/volumes`, { chainPath: ROOT })).get(cid);
-            const photo = readPhoto(sdk, v.rootBytes());
-            if (photo) return URL.createObjectURL(new Blob([photo.bytes], { type: photo.type }));
-          } catch {}
-        }
-        void volumes;
-        return undefined;
-      })(),
+      turnup
+        .volume(ROOT, cid)
+        .then((v) => {
+          const photo = readPhoto(sdk, v.rootBytes());
+          return photo ? URL.createObjectURL(new Blob([photo.bytes], { type: photo.type })) : undefined;
+        })
+        .catch(() => undefined),
     );
   }
   return photoCache.get(cid);
