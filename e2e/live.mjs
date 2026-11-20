@@ -16,7 +16,7 @@ import { inboxKey } from "../client/seal.mjs";
 import { createTurnup } from "../client/turnup.mjs";
 
 const NODE = "https://lattice-testnet-apps-iad.fly.dev";
-const SECOND = "https://lattice-testnet-apps-ams.fly.dev";
+const SECOND = "https://ams.testnet.lattice.build";
 const SPONSOR = "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor";
 const ROOT = ["Nexus", "testnet", "turnup-b3494e"];
 // A deploy restarts the sponsor for a minute or two; blocks are minutes apart.
