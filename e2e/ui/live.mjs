@@ -132,7 +132,7 @@ try {
   await expect(panel).toContainText("This has been returned to its owner.");
   const me = await page.evaluate(() => JSON.parse(localStorage.getItem("turnup:me")));
   for (const chain of ["Nexus/testnet/turnup-b3494e", "Nexus/testnet/turnup-b3494e/dr5"]) {
-    const r = await fetch(`https://lattice-testnet-apps-ams.fly.dev/api/state/account/${me}?chainPath=${chain}`, { cache: "no-store" });
+    const r = await fetch(`https://ams.testnet.lattice.build/api/state/account/${me}?chainPath=${chain}`, { cache: "no-store" });
     const balance = r.ok ? (await r.json()).balance ?? "0" : "0";
     if (balance !== "0") throw new Error(`${me} holds ${balance} on ${chain}`);
   }
