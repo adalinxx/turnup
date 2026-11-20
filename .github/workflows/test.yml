@@ -33,6 +33,68 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - run: npm test
 
+  policy:
+    name: Policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal --target wasm32-unknown-unknown
+          rustup default 1.96.0
+      - name: Build the policy
+        run: cargo build --release --target wasm32-unknown-unknown --manifest-path policy/Cargo.toml
+      - name: The module names no build path
+        run: "! strings -n 4 policy/target/wasm32-unknown-unknown/release/turnup_policy.wasm | grep -E '/home/|/Users/|\\.cargo|\\\\'"
+      - name: Policy tests, with the committed migrated-from
+        env:
+          CONTEXT_DIR: ${{ github.workspace }}/contexts/committed
+        run: node --test policy/test/policy.test.mjs
+      - run: cp policy/target/wasm32-unknown-unknown/release/turnup_policy.wasm committed.wasm
+      # The other case: a chain that carries on from another.
+      - name: Policy tests, built with a migrated-from value
+        env:
+          CONTEXT_DIR: ${{ github.workspace }}/contexts/migrated
+        run: |
+          echo '{"chain":"Nexus/testnet/turnup-b3494e","height":123456,"snapshot":"bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy"}' > policy/migrated-from
+          cargo build --release --target wasm32-unknown-unknown --manifest-path policy/Cargo.toml
+          node --test policy/test/policy.test.mjs
+          cp policy/target/wasm32-unknown-unknown/release/turnup_policy.wasm migrated.wasm
+      - run: tar -czf policy.tar.gz contexts committed.wasm migrated.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: policy
+          path: policy.tar.gz
+          retention-days: 3
+
+  engine:
+    name: Policy in Lattice's own host
+    needs: policy
+    runs-on: ubuntu-24.04
+    container: swift:6.1-jammy
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: policy
+      - name: Build host-check
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev
+          swift build -c release --package-path policy/host-check
+      # A chain's policy is fixed at genesis, so the node's engine must give
+      # every verdict the tests' engine gave.
+      - name: Replay every context through Lattice's own host
+        shell: bash
+        run: |
+          tar -xzf policy.tar.gz
+          policy/host-check/.build/release/host-check committed.wasm contexts/committed
+          policy/host-check/.build/release/host-check migrated.wasm contexts/migrated
+
   node:
     name: Build the Lattice node and fee sponsor
     runs-on: ubuntu-24.04

@@ -84,10 +84,40 @@ python3 -m http.server 8765   # then open http://127.0.0.1:8765/app/
 It reads the test network by default. A link may carry `?node=` (comma
 separated), `?chain=`, `?sponsor=`, `?wallet=` and `?coin=` for that visit.
 
+## Moving to a new chain
+
+A chain's policy is fixed at its genesis, so changing the rules means a new
+chain, and the Names chain's `turnup` pointed at it. `policy/` is the policy
+for that next chain: Stoa's (the module the chains run now, `chain/policy.wasm`)
+plus one record, `migrated-from`, saying which chain it carries on from:
+
+```json
+{"chain":"Nexus/testnet/turnup-b3494e","height":123456,"snapshot":"bafk…"}
+```
+
+The value is built into the module from `policy/migrated-from`, so the new
+chain's spec commits to it. Anyone may write that exact value once; nothing
+else may be written there, and it is never changed or deleted. Built from an
+empty file, the module refuses the key.
+
+1. Announce a block height H on the old chain. From H the app stops writing
+   there, and nothing written after H is carried over.
+2. Snapshot the old chain at H, and publish the snapshot.
+3. Put the value in `policy/migrated-from`, build, copy the module to
+   `chain/policy.wasm` and its CID to `chain/spec.json`.
+4. Launch the new root and its area chains with that spec, write
+   `migrated-from` on each, and carry the snapshot over.
+5. Point `turnup` at the new root.
+
+Anyone can rebuild the snapshot from the old chain at H and compare it with
+what the new chain holds.
+
 ## Tests
 
 ```sh
-npm test                       # records, policy, sealing, matching
+npm test                       # records, sealing, matching
+(cd policy && cargo build --release --target wasm32-unknown-unknown) && \
+  node --test policy/test/policy.test.mjs   # the next chain's policy
 cd e2e/ui && npm install && \
   LATTICE=<lattice-node>/.build/debug/lattice \
   LATTICE_SPONSOR=<lattice-sponsor>/.build/debug/lattice-sponsor \
